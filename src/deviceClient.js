@@ -1,0 +1,273 @@
+// Thin wrapper around the DS-K1T804 series' ISAPI for the calls we actually
+// need: pulling the enrolled-user list (to resolve names) and pulling
+// historical AcsEvent records (to backfill anything the live push might
+// have missed, e.g. while this service was down).
+//
+// Forked from face-terminal-solo (originally written against the
+// DS-K1T343EWX) -- the underlying ISAPI calls below are standard across
+// Hikvision's access-control terminal line, not device-specific, and
+// POST /ISAPI/AccessControl/AcsEvent?format=json is independently confirmed
+// to be the right endpoint for this exact model family (the DS-K1T804AMF,
+// a close sibling of the BEF variant this repo targets -- see
+// ipcamtalk.com thread 80201, "ISAPI AccessControl Event Retrieval Fails
+// with Invalid Content Error"). That thread's actual bug was a missing
+// startTime/endTime in the request body -- already present unconditionally
+// below, so that specific failure shouldn't reproduce here. Still NOT
+// verified against a real DS-K1T804BEF unit as of this writing -- use
+// scripts/probe-device.js against the real device before trusting this
+// blind; see its own header comment for exactly what to check.
+
+const { digestRequest } = require('./digest');
+const { getDeviceIp } = require('./deviceState');
+const { georgiaNaive } = require('./time');
+const authState = require('./deviceAuthState');
+
+function baseUrl() {
+  const protocol = process.env.DEVICE_PROTOCOL || 'http';
+  return `${protocol}://${getDeviceIp()}`;
+}
+
+// Thrown specifically for a 401 so callers (the poller, in particular) can
+// tell "credentials are wrong" apart from "network blip" and react
+// differently — see deviceAuthState.js for why that distinction matters.
+class DeviceAuthError extends Error {}
+
+async function isapi(method, path, jsonBody) {
+  const res = await digestRequest({
+    method,
+    url: `${baseUrl()}${path}`,
+    username: process.env.DEVICE_USER,
+    password: process.env.DEVICE_PASS,
+    headers: jsonBody ? { 'Content-Type': 'application/json' } : {},
+    body: jsonBody ? JSON.stringify(jsonBody) : undefined,
+  });
+  if (res.status === 401) {
+    authState.recordAuthFailure();
+    throw new DeviceAuthError(`ISAPI ${method} ${path} -> HTTP 401: authentication failed — check the terminal's username/password in Settings`);
+  }
+  if (res.status >= 300) {
+    throw new Error(`ISAPI ${method} ${path} -> HTTP ${res.status}: ${res.text.slice(0, 300)}`);
+  }
+  authState.recordAuthSuccess();
+  try {
+    return JSON.parse(res.text);
+  } catch (err) {
+    // A real failure mode documented on a sibling model (DS-K1T344, see
+    // github.com/nupsterd/hikvision-face-terminal-addon PR #1): some
+    // Hikvision firmware silently ignores ?format=json on certain endpoints
+    // and replies with XML instead. Surfacing that plainly here (instead of
+    // letting JSON.parse's cryptic "Unexpected token '<'" propagate) is the
+    // difference between a five-second diagnosis and a confused debugging
+    // session the next time this fires against the real device.
+    throw new Error(`ISAPI ${method} ${path} -> response wasn't valid JSON (device may have ignored ?format=json and returned XML instead): ${res.text.slice(0, 300)}`);
+  }
+}
+
+/** Pulls the full enrolled-user list (paginated) as [{employeeNo, name}]. */
+async function fetchAllUsers() {
+  const users = [];
+  let position = 0;
+  const pageSize = 30;
+  while (true) {
+    const doc = await isapi('POST', '/ISAPI/AccessControl/UserInfo/Search?format=json', {
+      UserInfoSearchCond: { searchID: '1', searchResultPosition: position, maxResults: pageSize },
+    });
+    const list = doc.UserInfoSearch?.UserInfo || [];
+    for (const u of list) users.push({ employeeNo: u.employeeNo, name: u.name });
+    position += list.length;
+    if (list.length < pageSize || position >= (doc.UserInfoSearch?.totalMatches ?? position)) break;
+  }
+  return users;
+}
+
+// 10, not 30 (what face-terminal-solo used for the DS-K1T343EWX) -- a real
+// user's troubleshooting of this exact device family reported a maxResults
+// cap around 10 per AcsEvent request, a batch of 30 getting rejected as a
+// bad parameter. Unconfirmed against our own unit; lowering costs nothing
+// (just a few more paginated round-trips) and avoids a plausible failure
+// mode entirely until that's verified for real.
+const ACS_EVENT_PAGE_SIZE = 10;
+
+/** Pulls AcsEvent history in [startTime, endTime) (ISO 8601 with offset), paginated. */
+async function fetchEvents({ startTime, endTime, maxResults = ACS_EVENT_PAGE_SIZE }) {
+  const events = [];
+  let position = 0;
+  while (true) {
+    const doc = await isapi('POST', '/ISAPI/AccessControl/AcsEvent?format=json', {
+      AcsEventCond: {
+        searchID: '1', searchResultPosition: position, maxResults, major: 0, minor: 0, startTime, endTime,
+      },
+    });
+    const list = doc.AcsEvent?.InfoList || [];
+    events.push(...list);
+    position += list.length;
+    if (list.length < maxResults || position >= (doc.AcsEvent?.totalMatches ?? position)) break;
+  }
+  return events;
+}
+
+// Live snapshot from the terminal's own camera (channel 101 — its channel
+// name matches this device's serial number). Used to grab a photo at the
+// moment a check-in is detected; there's no historical-photo API for
+// AcsEvent search results (confirmed: JSON records carry a FaceRect bounding
+// box but no picture reference), so this is "as-close-to-the-moment-as-our-
+// poll-interval-allows", not the exact verification frame.
+async function fetchSnapshot() {
+  const res = await digestRequest({
+    method: 'GET',
+    url: `${baseUrl()}/ISAPI/Streaming/channels/101/picture`,
+    username: process.env.DEVICE_USER,
+    password: process.env.DEVICE_PASS,
+  });
+  if (res.status === 401) {
+    authState.recordAuthFailure();
+    throw new DeviceAuthError('fetchSnapshot -> HTTP 401: authentication failed — check the terminal\'s username/password in Settings');
+  }
+  if (res.status !== 200) throw new Error(`fetchSnapshot -> HTTP ${res.status}`);
+  authState.recordAuthSuccess();
+  return res.buffer;
+}
+
+// NOT yet confirmed live against a real device, unlike everything else in
+// this file -- sourced directly from Hikvision's own "Device Network SDK
+// (Person-Based Access Control) Developer Guide" (already present on this
+// box at /opt/hiksdk/.../doc/), which documents this exact ISAPI endpoint's
+// JSON request/response shape (E.187 FDSearch -> JSON_SearchFaceRecordResult),
+// not guessed from general API conventions. faceLibType/FDID match exactly
+// what uploadFace() below already writes new faces into, since this reads
+// from that same library. Per the docs, a matched record's "faceURL" field
+// (when present) is a second URL to fetch the actual JPEG from -- this
+// follows that second hop the same way fetchSnapshot() above does its own
+// single-hop fetch. Needs a real device to confirm the response actually
+// looks like the docs say before trusting this in production.
+async function fetchEnrolledFacePhoto(employeeNo) {
+  const doc = await isapi('POST', '/ISAPI/Intelligent/FDLib/FDSearch?format=json', {
+    searchResultPosition: 0,
+    maxResults: 1,
+    faceLibType: 'blackFD',
+    FDID: '1',
+    FPID: String(employeeNo),
+  });
+  const match = doc.MatchList?.[0];
+  if (!match) throw new Error(`no face record found on the device for employeeNo ${employeeNo} (search response: errorCode=${doc.errorCode} errorMsg=${doc.errorMsg} responseStatusStrg=${doc.responseStatusStrg} totalMatches=${doc.totalMatches})`);
+  if (!match.faceURL) throw new Error(`device has a face record for employeeNo ${employeeNo} but didn't return a faceURL to fetch the picture from`);
+
+  // Confirmed live: the raw faceURL comes back as e.g.
+  // ".../enrlFace/0/0000000002.jpg@WEB000000000883" -- that "@WEB..." tail
+  // increments by exactly 1 on every single FDSearch call within the same
+  // run (883, 884, 885, ...), which means it's a per-request token the
+  // device tacks onto the URL, not part of the real file path. Fetching
+  // that full string 404s every time ("Can't locate document: ...jpg@WEB...",
+  // the device's own static file server treating the whole thing as one
+  // filename that doesn't exist) -- stripping everything from "@" onward
+  // and fetching the plain path is the fix, on the theory that the real
+  // file just doesn't have that suffix in its actual name.
+  const cleanFaceUrl = match.faceURL.replace(/@.*$/, '');
+  const fetchUrl = cleanFaceUrl.startsWith('http') ? cleanFaceUrl : `${baseUrl()}${cleanFaceUrl}`;
+  const res = await digestRequest({
+    method: 'GET',
+    url: fetchUrl,
+    username: process.env.DEVICE_USER,
+    password: process.env.DEVICE_PASS,
+  });
+  if (res.status === 401) {
+    authState.recordAuthFailure();
+    throw new DeviceAuthError(`fetchEnrolledFacePhoto -> HTTP 401 fetching faceURL for employeeNo ${employeeNo} (raw faceURL: "${match.faceURL}", requested: ${fetchUrl})`);
+  }
+  // Raw faceURL + the resolved URL + a slice of the device's own response
+  // body included directly in the error -- this whole function is still
+  // unconfirmed against a real device (see the comment above), so when it
+  // fails the actual values matter far more than a bare status code for
+  // figuring out what's actually wrong.
+  if (res.status !== 200) throw new Error(`fetchEnrolledFacePhoto -> HTTP ${res.status} fetching faceURL for employeeNo ${employeeNo} (raw faceURL: "${match.faceURL}", requested: ${fetchUrl}, response: ${res.text.slice(0, 200)})`);
+  authState.recordAuthSuccess();
+  return res.buffer;
+}
+
+/** Next free numeric employeeNo — one past the current highest, so new hires never collide. */
+async function nextEmployeeNo() {
+  const users = await fetchAllUsers();
+  const nums = users.map((u) => parseInt(u.employeeNo, 10)).filter(Number.isFinite);
+  return String((nums.length ? Math.max(...nums) : 0) + 1);
+}
+
+function userInfoRecord({ employeeNo, name }) {
+  const now = new Date();
+  const tenYearsOut = new Date(now);
+  tenYearsOut.setFullYear(tenYearsOut.getFullYear() + 10);
+  return {
+    UserInfo: {
+      employeeNo: String(employeeNo),
+      name,
+      userType: 'normal',
+      Valid: {
+        enable: true,
+        // timeType: 'local' means the device reads these as ITS OWN local
+        // clock (Georgia) — georgiaNaive gives that regardless of what
+        // timezone this machine happens to be configured with.
+        beginTime: georgiaNaive(now),
+        endTime: georgiaNaive(tenYearsOut),
+        timeType: 'local',
+      },
+      doorRight: '1',
+      RightPlan: [{ doorNo: 1, planTemplateNo: '1' }],
+    },
+  };
+}
+
+/** Creates a brand-new enrolled user. employeeNo MUST NOT already exist on the device (use nextEmployeeNo()) — confirmed live: this endpoint is create-only and returns "employeeNoAlreadyExist" (HTTP 400) for an existing one, that's what Modify below is for. */
+async function createDeviceUser({ employeeNo, name }) {
+  return isapi('POST', '/ISAPI/AccessControl/UserInfo/Record?format=json', userInfoRecord({ employeeNo, name }));
+}
+
+/** Updates an already-enrolled user's name/rights (e.g. a rename from the dashboard). employeeNo MUST already exist — confirmed live against the device's UserInfo/Modify endpoint. */
+async function modifyDeviceUser({ employeeNo, name }) {
+  return isapi('PUT', '/ISAPI/AccessControl/UserInfo/Modify?format=json', userInfoRecord({ employeeNo, name }));
+}
+
+/** Uploads a face photo for an already-created employeeNo. jpegBuffer must be a real JPEG. */
+async function uploadFace({ employeeNo, jpegBuffer }) {
+  const boundary = `----faceterminal${Date.now()}`;
+  const metaPart = Buffer.from(
+    `--${boundary}\r\n` +
+    'Content-Disposition: form-data; name="FaceDataRecord"\r\n' +
+    'Content-Type: application/json\r\n\r\n' +
+    JSON.stringify({ faceLibType: 'blackFD', FDID: '1', FPID: String(employeeNo) }) +
+    '\r\n',
+  );
+  const imagePart = Buffer.concat([
+    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="img"\r\nContent-Type: image/jpeg\r\n\r\n`),
+    jpegBuffer,
+    Buffer.from('\r\n'),
+  ]);
+  const closing = Buffer.from(`--${boundary}--\r\n`);
+  const body = Buffer.concat([metaPart, imagePart, closing]);
+
+  const res = await digestRequest({
+    method: 'PUT', // confirmed against the device — POST returns methodNotAllowed here
+    url: `${baseUrl()}/ISAPI/Intelligent/FDLib/FDSetUp?format=json`,
+    username: process.env.DEVICE_USER,
+    password: process.env.DEVICE_PASS,
+    headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+    body,
+  });
+  if (res.status === 401) {
+    authState.recordAuthFailure();
+    throw new DeviceAuthError('uploadFace -> HTTP 401: authentication failed — check the terminal\'s username/password in Settings');
+  }
+  if (res.status >= 300) throw new Error(`uploadFace -> HTTP ${res.status}: ${res.text.slice(0, 300)}`);
+  authState.recordAuthSuccess();
+  return JSON.parse(res.text);
+}
+
+/** Removes an enrolled user entirely (used to clean up a throwaway test user). */
+async function deleteDeviceUser(employeeNo) {
+  return isapi('PUT', '/ISAPI/AccessControl/UserInfo/Delete?format=json', {
+    UserInfoDelCond: { EmployeeNoList: [{ employeeNo: String(employeeNo) }] },
+  });
+}
+
+module.exports = {
+  fetchAllUsers, fetchEvents, fetchSnapshot, fetchEnrolledFacePhoto, nextEmployeeNo, createDeviceUser, modifyDeviceUser, uploadFace, deleteDeviceUser,
+  DeviceAuthError,
+};

@@ -1,0 +1,24 @@
+{
+  "name": "face-terminal",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node --env-file=.env src/server.js",
+    "dev": "node --watch --env-file=.env src/server.js",
+    "backfill": "node --env-file=.env scripts/backfill.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "express": "^5.2.1",
+    "koffi": "^3.3.0",
+    "ws": "^8.21.0"
+  },
+  "allowScripts": {
+    "koffi@3.3.0": true
+  }
+}

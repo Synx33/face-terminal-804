@@ -1,0 +1,660 @@
+/* Self-hosted (see /public/fonts) rather than a CDN import — this runs on a
+   site laptop that may have no internet access post-install, and a live
+   Google Fonts request would be a silent failure risk. Georgian (Mkhedruli)
+   needs its own subset since most Latin display fonts don't include it at
+   all — Noto Sans/Serif Georgian are Google's purpose-built pan-script
+   families with real Georgian coverage, used here for both scripts so
+   mixed Georgian/Latin content (a name typed in either script) never falls
+   back to a mismatched system font mid-sentence. */
+@font-face {
+  font-family: 'Registry Sans';
+  src: url('/fonts/noto-sans-georgian-geo.woff2') format('woff2');
+  unicode-range: U+0589, U+10A0-10FF, U+1C90-1CBA, U+1CBD-1CBF, U+205A, U+2D00-2D2F, U+2E31;
+  font-weight: 400 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Registry Sans';
+  src: url('/fonts/noto-sans-georgian-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2122;
+  font-weight: 400 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Registry Serif';
+  src: url('/fonts/noto-serif-georgian-geo.woff2') format('woff2');
+  unicode-range: U+0589, U+10A0-10FF, U+1C90-1CBA, U+1CBD-1CBF, U+205A, U+2D00-2D2F, U+2E31;
+  font-weight: 400 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Registry Serif';
+  src: url('/fonts/noto-serif-georgian-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+2122;
+  font-weight: 400 700;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Registry Mono';
+  src: url('/fonts/jetbrains-mono-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+2000-206F;
+  font-weight: 400 600;
+  font-display: swap;
+}
+
+/* --- palette: "registry / ledger" — warm paper, ruled lines, ink-green accent,
+   deliberately not another blue-SaaS or neon-terminal dashboard. ---------- */
+:root {
+  color-scheme: light;
+  --bg: #f7f4ec;
+  --surface: #fdfcf8;
+  --surface-raised: #f0ebe0;
+  --border: #ddd5c3;
+  --rule: #cfc5ac;
+  --text: #23201a;
+  --text-muted: #6b6355;
+  --text-faint: #a09879;
+  --accent: #2f5d4c;
+  --accent-ink: #24483a;
+  --accent-soft: #e2ebe4;
+  --out: #6b6355;
+  --danger: #a3372e;
+  --danger-soft: #f3e4e1;
+  --radius: 3px;
+  --font-display: 'Registry Serif', Georgia, serif;
+  --font-body: 'Registry Sans', system-ui, sans-serif;
+  --font-mono: 'Registry Mono', ui-monospace, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --bg: #1a1712;
+    --surface: #221e17;
+    --surface-raised: #2a2519;
+    --border: #3c3527;
+    --rule: #453d2c;
+    --text: #ece6d8;
+    --text-muted: #a89d84;
+    --text-faint: #6f6552;
+    --accent: #74af97;
+    --accent-ink: #8fc4ae;
+    --accent-soft: #263630;
+    --out: #a89d84;
+    --danger: #d9847a;
+    --danger-soft: #382320;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.wrap {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 4rem;
+}
+
+/* --- header ---------------------------------------------------------------- */
+
+header.top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 2px solid var(--text);
+}
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+
+.brand .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  display: inline-block;
+  position: relative;
+  top: -3px;
+  flex-shrink: 0;
+}
+
+.brand .dot.live {
+  background: var(--accent);
+  animation: pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.4; }
+}
+
+h1 {
+  font-family: var(--font-display);
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.top-right {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding-top: 0.2rem;
+}
+
+.subtitle {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.subtitle.subtitle-err { color: var(--danger); }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+}
+.icon-btn:hover { border-color: var(--text-muted); color: var(--text); background: var(--surface-raised); }
+
+/* --- tabs -------------------------------------------------------------------- */
+
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 1.75rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.tab {
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 0.6rem 0.2rem;
+  margin-right: 1.4rem;
+  cursor: pointer;
+}
+.tab:hover { color: var(--text); background: transparent; }
+.tab[aria-selected="true"] {
+  color: var(--accent-ink);
+  border-bottom-color: var(--accent);
+}
+
+.tab-panel { animation: panel-in 0.22s ease; }
+@keyframes panel-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* --- controls / form elements ------------------------------------------------ */
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 1.25rem;
+}
+
+input[type=date], button, input[type=text], input[type=password], input[type=file], select {
+  font-family: var(--font-body);
+  font-size: 0.85rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.5rem 0.7rem;
+}
+
+button {
+  cursor: pointer;
+  font-weight: 500;
+  transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+}
+
+button:hover { border-color: var(--text-muted); background: var(--surface-raised); }
+button:active { transform: translateY(1px); }
+
+button.primary {
+  background: var(--accent);
+  color: #fdfcf8;
+  border-color: var(--accent-ink);
+}
+button.primary:hover { background: var(--accent-ink); }
+
+button:disabled { opacity: 0.5; cursor: default; transform: none; }
+
+#status {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+/* --- check-in feed: ruled register rows, not floating cards ------------------ */
+
+.feed {
+  border-top: 1px solid var(--rule);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 38px 1fr auto auto;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 0.65rem 0.25rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.row.fresh { animation: land 0.5s ease-out; }
+@keyframes land {
+  from { background: var(--accent-soft); }
+  to   { background: transparent; }
+}
+
+.avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  object-fit: cover;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 0.75rem;
+  color: var(--text-faint);
+  overflow: hidden;
+}
+
+.avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.avatar img, .pending-card img.thumb { cursor: zoom-in; transition: filter 0.15s; }
+.avatar img:hover, .pending-card img.thumb:hover { filter: brightness(1.1); }
+
+.who { min-width: 0; }
+.who .name { font-family: var(--font-display); font-weight: 500; font-size: 1rem; }
+.who .no { font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-faint); }
+
+.time { font-family: var(--font-mono); font-size: 0.82rem; color: var(--text-muted); white-space: nowrap; }
+
+.badge {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.22rem 0.5rem;
+  border-radius: var(--radius);
+  white-space: nowrap;
+}
+.badge.in  { background: var(--accent-soft); color: var(--accent-ink); }
+.badge.out { background: transparent; color: var(--out); border: 1px solid var(--border); }
+.badge.device-card { background: transparent; color: var(--text-faint); border: 1px solid var(--border); font-weight: 500; }
+
+.badges {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  justify-content: flex-end;
+}
+
+.empty {
+  color: var(--text-faint);
+  text-align: center;
+  padding: 3rem 0;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+
+/* --- subsections (workers / settings-modal groupings) ------------------------ */
+
+.subsection {
+  margin-top: 2.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--rule);
+}
+.subsection:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+
+.subsection h2 {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 0.6rem;
+}
+
+.subsection h3 {
+  font-family: var(--font-display);
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--accent-ink);
+  margin: 0 0 0.75rem;
+}
+
+.panel-hint {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 0 0 1rem;
+  max-width: 46em;
+  line-height: 1.5;
+}
+
+.hint-text {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-faint);
+  line-height: 1.5;
+}
+
+
+.enroll-msg {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  padding: 0.5rem 0;
+}
+.enroll-msg.ok { color: var(--accent-ink); }
+.enroll-msg.err { color: var(--danger); }
+
+/* --- worker / pending cards --------------------------------------------------- */
+
+.pending-grid, .worker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 0.9rem;
+}
+
+.pending-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+/* .pending-card sets display:flex via a class selector -- equal specificity
+   to the browser's default [hidden] { display: none }, and author CSS wins
+   ties regardless of source order. Without this, the worker search filter's
+   card.hidden = true would leave every "hidden" card still visibly laid out. */
+.pending-card[hidden] { display: none; }
+
+.worker-search {
+  width: 100%;
+  max-width: 320px;
+  padding: 0.5rem 0.7rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  margin-bottom: 0.9rem;
+}
+
+.pending-card .thumb {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 2px;
+  object-fit: cover;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+}
+
+.pending-card .thumb-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.3rem;
+  color: var(--text-faint);
+  cursor: default;
+}
+
+.pending-card .no {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+.pending-card input[type=text] {
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.8rem;
+}
+
+.pending-card .pending-row,
+.pending-card .card-row {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.pending-card .card-row input { flex: 1; min-width: 0; }
+.pending-card .card-row button.save-card { flex-shrink: 0; }
+
+.pending-card .pending-row button.save { flex: 1; }
+
+.pending-card button {
+  padding: 0.4rem 0.6rem;
+  font-size: 0.8rem;
+}
+
+.pending-card button.discard {
+  color: var(--danger);
+  border-color: var(--danger-soft);
+}
+.pending-card button.discard:hover { border-color: var(--danger); background: var(--danger-soft); }
+
+.pending-card .pending-status {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  min-height: 1em;
+}
+.pending-status.ok { color: var(--accent-ink); }
+.pending-status.err { color: var(--danger); }
+
+/* --- payroll table -------------------------------------------------------------- */
+
+.payroll-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1.25rem;
+  font-size: 0.88rem;
+}
+
+.payroll-table th {
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  padding: 0.5rem 0.6rem;
+  border-bottom: 2px solid var(--text);
+}
+
+.payroll-table td {
+  padding: 0.55rem 0.6rem;
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--font-mono);
+}
+.payroll-table td:first-child { font-family: var(--font-body); }
+
+.payroll-table tr:last-child td { border-bottom: none; }
+
+.wage-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.wage-input-inline {
+  width: 5.5em;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+.wage-cell .save-wage-btn {
+  width: 1.7rem;
+  height: 1.7rem;
+  flex-shrink: 0;
+}
+.wage-cell .save-wage-btn:hover { color: var(--accent-ink); border-color: var(--accent); }
+
+/* --- settings form rows (used inside the modal) -------------------------------- */
+
+.field-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.7rem;
+}
+
+.field-row label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  min-width: 11em;
+}
+
+.field-row input[type=text], .field-row input[type=password] { flex: 1 1 180px; }
+.input-narrow { flex: 0 1 110px !important; }
+.field-row .icon-btn { flex-shrink: 0; }
+
+/* --- settings modal -------------------------------------------------------------- */
+
+dialog#settingsModal {
+  width: min(560px, 92vw);
+  max-height: 85vh;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 2px 0 var(--accent), 0 24px 48px -12px rgba(0, 0, 0, 0.35);
+}
+
+dialog#settingsModal[open] { animation: modal-in 0.18s cubic-bezier(0.16, 1, 0.3, 1); }
+@keyframes modal-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+dialog#settingsModal::backdrop {
+  background: rgba(26, 23, 18, 0.45);
+  backdrop-filter: blur(2px);
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.1rem 1.4rem;
+  border-bottom: 1px solid var(--rule);
+}
+.modal-head h2 {
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.modal-body {
+  padding: 1.1rem 1.4rem 1.4rem;
+  overflow-y: auto;
+  max-height: calc(85vh - 4.2rem);
+}
+
+/* --- photo lightbox --------------------------------------------------------- */
+
+/* The bug that mattered here: `.lightbox { display: flex }` below has the
+   same specificity as the browser's built-in `[hidden] { display: none }`,
+   and author CSS always wins that tie regardless of source order — so the
+   element stayed `display: flex` even while `hidden`, sitting invisible
+   (opacity: 0) but fully present over the entire page, swallowing every
+   click on the dashboard. This rule's higher specificity (class + attribute)
+   is what actually fixes it. */
+.lightbox[hidden] { display: none; }
+
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(26, 23, 18, 0.78);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  cursor: zoom-out;
+  opacity: 0;
+  transition: opacity 0.22s ease;
+}
+
+.lightbox.open { opacity: 1; }
+
+.lightbox img {
+  max-width: min(90vw, 720px);
+  max-height: 86vh;
+  border-radius: 4px;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+  cursor: default;
+  transform: scale(0.94) translateY(8px);
+  transition: transform 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.lightbox.open img { transform: scale(1) translateY(0); }
+
+.lightbox-close {
+  position: absolute;
+  top: 1.25rem;
+  right: 1.5rem;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 50%;
+  border: 1px solid rgba(253, 252, 248, 0.3);
+  background: rgba(253, 252, 248, 0.1);
+  color: #fdfcf8;
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.15s;
+}
+
+.lightbox-close:hover {
+  border-color: #fdfcf8;
+  background: rgba(253, 252, 248, 0.2);
+  transform: rotate(90deg);
+}
+
+@media (max-width: 560px) {
+  .row { grid-template-columns: 32px 1fr auto; }
+  .row .time { display: none; }
+  .field-row label { min-width: 100%; }
+}

@@ -1,0 +1,80 @@
+// Lets the dashboard's Settings panel set the device IP and credentials
+// directly (type them in, done — no editing .env by hand on the site
+// laptop, no restart needed). Takes effect immediately, and persists to
+// .env so it survives the next restart too. Added after a real support
+// case: a mistyped DEVICE_PASS in .env (an easy mistake — a laptop with a
+// different keyboard layout can silently type "@" as something else) had
+// no fix path except finding and hand-editing the file as Administrator.
+
+const fs = require('fs');
+const path = require('path');
+const { setDeviceIp } = require('./deviceState');
+const authState = require('./deviceAuthState');
+
+const ENV_PATH = path.join(__dirname, '..', '.env');
+
+function setEnvVar(key, value) {
+  let content = '';
+  try { content = fs.readFileSync(ENV_PATH, 'utf8'); } catch { /* no .env on disk yet — fine, we'll create one */ }
+  const line = `${key}=${value}`;
+  const pattern = new RegExp(`^${key}=.*$`, 'm');
+  if (pattern.test(content)) {
+    content = content.replace(pattern, line);
+  } else {
+    content += (content === '' || content.endsWith('\n') ? '' : '\n') + line + '\n';
+  }
+  fs.writeFileSync(ENV_PATH, content);
+}
+
+function setDeviceIpPersisted(ip) {
+  setDeviceIp(ip);
+  setEnvVar('DEVICE_IP', ip);
+}
+
+// deviceClient.js reads process.env.DEVICE_USER/DEVICE_PASS fresh on every
+// ISAPI call (never cached at startup), so updating process.env here takes
+// effect on the very next request — no restart, no deviceState-style
+// module needed for these two.
+function setDeviceCredentialsPersisted({ user, pass }) {
+  if (user !== undefined) {
+    process.env.DEVICE_USER = user;
+    setEnvVar('DEVICE_USER', user);
+  }
+  if (pass !== undefined) {
+    process.env.DEVICE_PASS = pass;
+    setEnvVar('DEVICE_PASS', pass);
+  }
+  // Give whatever was just typed an immediate fresh attempt on the next
+  // poll tick, rather than making the user wait out a backoff window that
+  // was set for the OLD (wrong) credentials.
+  authState.resetBackoff();
+}
+
+// Same pattern as above, for the second device (DS-K2802 card-reader
+// controller). Separate functions rather than parametrizing the ones above
+// so the face-terminal path is untouched by this addition. No separate
+// state/auth-backoff module here (unlike the face terminal) — the card
+// device connection is a persistent SDK session, not a per-request HTTP
+// client, so server.js just tears it down and reconnects fresh whenever
+// these are called (see reconnectCardDevice in server.js).
+function setCardDeviceIpPersisted(ip) {
+  process.env.CARD_DEVICE_IP = ip;
+  setEnvVar('CARD_DEVICE_IP', ip);
+}
+
+function setCardDeviceCredentialsPersisted({ user, pass }) {
+  if (user !== undefined) {
+    process.env.CARD_DEVICE_USER = user;
+    setEnvVar('CARD_DEVICE_USER', user);
+  }
+  if (pass !== undefined) {
+    process.env.CARD_DEVICE_PASS = pass;
+    setEnvVar('CARD_DEVICE_PASS', pass);
+  }
+}
+
+module.exports = {
+  setDeviceIpPersisted, setDeviceCredentialsPersisted,
+  setCardDeviceIpPersisted, setCardDeviceCredentialsPersisted,
+  ENV_PATH,
+};
