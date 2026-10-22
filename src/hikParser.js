@@ -1,15 +1,29 @@
 // Normalizes an AcsEvent search-result record (ISAPI
 // AccessControl/AcsEvent) into the flat shape our db/dashboard use.
 //
-// Confirmed against the DS-K1T343EWX directly: events with a populated
-// `name`/`employeeNoString` are actual identity verifications (face/card
-// match) — door-status and tamper events never carry those fields. That's
-// the signal isCheckin() uses to tell "this is a check-in" from
-// "this is just a door/relay event".
+// On the DS-K1T343EWX (the device this file was originally written
+// against), a non-identification event (door status, tamper, etc.) simply
+// omits `name`/`employeeNoString` entirely -- their absence was the signal
+// isCheckin() used.
+//
+// Confirmed live against a real DS-K1T804BEF (scripts/probe-device.js) that
+// this device does NOT work the same way: every one of 3 real non-
+// identification events (door-status/operation entries, none with a name,
+// cardNo, or real person attached) still carried `employeeNoString: "0"` --
+// the literal STRING "0", not an absent/null field. "0" is JS-truthy, so
+// the original `Boolean(parsed.employeeNo)` check would have wrongly
+// treated every one of these as a real check-in and created a bogus
+// attendance row for a nonexistent "employee #0" on every door event this
+// device logs. isCheckin() below explicitly excludes "0" for exactly this
+// reason -- this is a DS-K1T804-specific fix, not backported to the
+// original DS-K1T343EWX codebase since there's no evidence that device
+// shares this sentinel-value convention.
 //
 // We use AcsEvent search exclusively (polling — see poller.js) rather than
 // the device's httpHosts push mechanism: arming push notifications flooded
-// us with an unrelated historical backlog instead of real-time events.
+// us with an unrelated historical backlog instead of real-time events
+// (confirmed on the 343EWX; not yet re-verified on this device, but the
+// same polling approach is used regardless).
 
 function toInt(v) {
   if (v === null || v === undefined || v === '') return null;
@@ -66,9 +80,15 @@ function parseJsonEvent(doc) {
 // as "an identification was attempted" lets db.js's insertCheckin() resolve
 // the person locally via its own card_no mapping even if the device didn't,
 // rather than silently dropping the event here before it ever gets a chance to.
+//
+// employeeNo === '0' is deliberately excluded -- see this file's header
+// comment. A real employeeNo on this device's own UserInfo enrollment is a
+// small positive integer string ("1", "2", ...); "0" is the device's own
+// sentinel for "nobody", confirmed against real non-identification events.
 /** True if this event represents an identified person (a check-in), not a bare door/tamper event. */
 function isCheckin(parsed) {
-  return Boolean(parsed.name || parsed.employeeNo || parsed.cardNo);
+  const hasRealEmployeeNo = Boolean(parsed.employeeNo) && parsed.employeeNo !== '0';
+  return Boolean(parsed.name || hasRealEmployeeNo || parsed.cardNo);
 }
 
 module.exports = { parseJsonEvent, isCheckin };

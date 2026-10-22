@@ -5,17 +5,27 @@
 //
 // Forked from face-terminal-solo (originally written against the
 // DS-K1T343EWX) -- the underlying ISAPI calls below are standard across
-// Hikvision's access-control terminal line, not device-specific, and
-// POST /ISAPI/AccessControl/AcsEvent?format=json is independently confirmed
-// to be the right endpoint for this exact model family (the DS-K1T804AMF,
-// a close sibling of the BEF variant this repo targets -- see
-// ipcamtalk.com thread 80201, "ISAPI AccessControl Event Retrieval Fails
-// with Invalid Content Error"). That thread's actual bug was a missing
-// startTime/endTime in the request body -- already present unconditionally
-// below, so that specific failure shouldn't reproduce here. Still NOT
-// verified against a real DS-K1T804BEF unit as of this writing -- use
-// scripts/probe-device.js against the real device before trusting this
-// blind; see its own header comment for exactly what to check.
+// Hikvision's access-control terminal line, not device-specific.
+//
+// fetchEvents() below IS now confirmed live against a real DS-K1T804BEF
+// (scripts/probe-device.js, 2026-10-22: GET deviceInfo -> HTTP 200,
+// AcsEvent search -> HTTP 200 with real InfoList records, maxResults=30
+// accepted on the first try -- see that function's own comment). Still
+// real open questions from that same probe run:
+//   - GET /ISAPI/System/deviceInfo returned XML despite ?format=json --
+//     this app never actually calls that endpoint in production (only the
+//     probe script does, for diagnostics), so it doesn't block anything,
+//     but it's a live example of the "some endpoints ignore format=json"
+//     failure mode this file's isapi() already guards against below.
+//   - Every event fetched so far is a non-identification system/door event
+//     (no real fingerprint/card tap observed yet) -- isCheckin()'s "0" fix
+//     in hikParser.js is based on those, but a REAL check-in's exact field
+//     shape (does a real tap populate employeeNoString with the real
+//     enrolled number? currentVerifyMode? cardNo for a card tap vs.
+//     fingerprint?) is still unconfirmed.
+//   - fetchAllUsers/createDeviceUser/modifyDeviceUser/uploadFace/
+//     deleteDeviceUser/fetchEnrolledFacePhoto below are UNTESTED against
+//     this device -- only fetchEvents has real evidence behind it so far.
 
 const { digestRequest } = require('./digest');
 const { getDeviceIp } = require('./deviceState');
@@ -80,13 +90,14 @@ async function fetchAllUsers() {
   return users;
 }
 
-// 10, not 30 (what face-terminal-solo used for the DS-K1T343EWX) -- a real
-// user's troubleshooting of this exact device family reported a maxResults
-// cap around 10 per AcsEvent request, a batch of 30 getting rejected as a
-// bad parameter. Unconfirmed against our own unit; lowering costs nothing
-// (just a few more paginated round-trips) and avoids a plausible failure
-// mode entirely until that's verified for real.
-const ACS_EVENT_PAGE_SIZE = 10;
+// 30 (same as face-terminal-solo used for the DS-K1T343EWX) -- a different
+// user's troubleshooting of a sibling device in this family reported a
+// maxResults cap around 10, but that is NOT what this exact unit does:
+// scripts/probe-device.js confirmed live (2026-10-22) that a real
+// DS-K1T804BEF accepts maxResults=30 on the first try, no error. Kept at
+// the original value rather than defensively lowered, since the lower
+// value is now a confirmed non-issue for this unit, not just unconfirmed.
+const ACS_EVENT_PAGE_SIZE = 30;
 
 /** Pulls AcsEvent history in [startTime, endTime) (ISO 8601 with offset), paginated. */
 async function fetchEvents({ startTime, endTime, maxResults = ACS_EVENT_PAGE_SIZE }) {
