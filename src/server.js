@@ -732,6 +732,9 @@ app.get('/api/payroll', (req, res) => {
   if (!start || !end) {
     return res.status(400).json({ error: 'start and end query params are required, e.g. ?start=2026-07-01&end=2026-07-31' });
   }
+  if (start > end) {
+    return res.status(400).json({ error: 'start date must be before end date' });
+  }
   res.json(db.payroll({ start, end }));
 });
 
@@ -769,6 +772,14 @@ app.get('/api/payroll/export', async (req, res) => {
   const { start, end } = req.query;
   if (!start || !end) {
     return res.status(400).json({ error: 'start and end query params are required' });
+  }
+  // Without this, a reversed range (start after end) doesn't error -- SQL's
+  // BETWEEN start AND end just matches nothing, silently returning an empty
+  // report instead of telling the client they typed the dates backwards.
+  // Confirmed live: checkins export already guards this same mistake, this
+  // route just hadn't been given the same check.
+  if (start > end) {
+    return res.status(400).json({ error: 'start date must be before end date' });
   }
   const rows = db.payroll({ start, end });
   const siteName = db.getSetting('site_name', 'დასწრების ჟურნალი');

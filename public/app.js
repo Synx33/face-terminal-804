@@ -734,11 +734,17 @@ async function calcPayroll() {
   const start = payrollStart.value;
   const end = payrollEnd.value;
   if (!start || !end) return;
+  if (start > end) {
+    payrollMsg.className = 'enroll-msg err';
+    payrollMsg.textContent = 'დაწყების თარიღი უნდა იყოს დასრულების თარიღზე ადრე';
+    return;
+  }
   payrollMsg.className = 'enroll-msg';
   payrollMsg.textContent = 'გამოითვლება…';
   try {
     const res = await fetch(`/api/payroll?start=${start}&end=${end}`);
     const rows = await res.json();
+    if (!res.ok) throw new Error(rows.error || 'ვერ შესრულდა');
     payrollBody.innerHTML = '';
     for (const r of rows) {
       const tr = document.createElement('tr');
@@ -769,6 +775,11 @@ document.getElementById('exportPayrollBtn').addEventListener('click', () => {
   const start = payrollStart.value;
   const end = payrollEnd.value;
   if (!start || !end) return;
+  if (start > end) {
+    payrollMsg.className = 'enroll-msg err';
+    payrollMsg.textContent = 'დაწყების თარიღი უნდა იყოს დასრულების თარიღზე ადრე';
+    return;
+  }
   window.location.href = `/api/payroll/export?start=${start}&end=${end}`;
 });
 
