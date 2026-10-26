@@ -188,8 +188,14 @@
           <input type="text" id="currencyInput" placeholder="₾" class="input-narrow" />
         </div>
         <div class="field-row">
-          <label for="pollIntervalInput">შემოწმების ინტერვალი (მწმ)</label>
-          <input type="text" id="pollIntervalInput" placeholder="1500" class="input-narrow" />
+          <label for="extractHourInput">ყოველდღიური გადმოწერის საათი (0-23)</label>
+          <input type="text" id="extractHourInput" placeholder="3" class="input-narrow" />
+        </div>
+        <p class="hint-text">ტერმინალი არ არის მუდმივად დასმული კითხვებით — ჩანაწერები ერთხელ დღეში გადმოიწერება ამ საათზე (საქართველოს დროით). ეს თავიდან აგვაცილებს ამ მოდელის ანგარიშის დროებით დაბლოკვას ხშირი მოთხოვნებისგან.</p>
+        <div class="field-row">
+          <label>ბოლო გადმოწერა</label>
+          <span id="lastExtractText" class="hint-text">—</span>
+          <button id="extractNowBtn" type="button">ახლავე გადმოწერა</button>
         </div>
         <div class="field-row">
           <label for="checkoutAfterInput">გასვლის დრო (სთ:წთ)</label>

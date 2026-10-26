@@ -280,8 +280,31 @@ function getCheckoutAfter() {
   return getSetting('checkout_after', process.env.CHECKOUT_AFTER || '19:00');
 }
 
-function getPollIntervalMs() {
-  return Number(getSetting('poll_interval_ms', process.env.POLL_INTERVAL_MS || 5000));
+// Which local hour (0-23, Georgia time) the once-daily batch pull runs at.
+// This device's embedded web server has repeatedly shown it can't reliably
+// handle frequent/continuous digest-auth traffic (confirmed live: both a
+// too-fast poll loop and even two separate processes politely taking turns
+// have tripped its account lockout) -- a single request window per day,
+// instead of one every couple seconds all day long, sidesteps that class of
+// problem entirely rather than trying to out-tune retry/backoff constants
+// against it forever.
+function getExtractHour() {
+  return Number(getSetting('extract_hour', process.env.EXTRACT_HOUR ?? 3));
+}
+
+// High-water mark: the end of the time range the last successful extraction
+// already covered, so the next run only asks for what's new instead of
+// re-fetching the whole history every night (insertCheckin's own serialNo
+// dedup would make re-fetching harmless, just pointlessly slow as history
+// grows). Null/missing means "never run" -- dailyExtract.js treats that as
+// "look back 48h" to safely catch up on a brand-new install.
+function getLastExtractThrough() {
+  const raw = getSetting('last_extract_through', '');
+  return raw || null;
+}
+
+function setLastExtractThrough(isoString) {
+  setSetting('last_extract_through', isoString);
 }
 
 const insertCheckinStmt = db.prepare(`
@@ -547,7 +570,7 @@ function payroll({ start, end }) {
 
 module.exports = {
   db, upsertEmployee, employeeName, insertCheckin, listCheckins, stats, clearCheckins, DB_PATH,
-  setCheckinPicture, getCheckinById, isSameSession, periodOf, getCheckoutAfter, getPollIntervalMs,
+  setCheckinPicture, getCheckinById, isSameSession, periodOf, getCheckoutAfter, getExtractHour, getLastExtractThrough, setLastExtractThrough,
   insertPendingWorker, listPendingWorkers, getPendingWorker, deletePendingWorker,
   listEmployees, setEmployeeWage, setEmployeePicture, listEmployeesMissingPicture, deleteEmployeeLocal, getSetting, setSetting, payroll,
   setEmployeeCard, employeeByCard, isCardOnlyEmployeeNo, nextLocalEmployeeNo,

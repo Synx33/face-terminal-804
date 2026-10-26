@@ -6,7 +6,9 @@ const { WebSocketServer } = require('ws');
 
 const db = require('./db');
 const deviceClient = require('./deviceClient');
-const { startPolling } = require('./poller');
+const { parseJsonEvent, isCheckin } = require('./hikParser');
+const { isoWithOffset } = require('./time');
+const { scheduleDailyExtraction } = require('./dailyExtract');
 const { SNAPSHOT_DIR, saveSnapshot, savePendingSnapshot, deleteSnapshot } = require('./snapshots');
 const { resolveDeviceIp, forceRediscover } = require('./resolveDevice');
 const { getDeviceIp, hasDeviceIp } = require('./deviceState');
@@ -191,12 +193,29 @@ app.get('/api/settings', (req, res) => {
     deviceUser: process.env.DEVICE_USER || null,
     siteName: db.getSetting('site_name', 'დასწრების ჟურნალი'),
     currency: db.getSetting('currency', '₾'),
-    pollIntervalMs: db.getPollIntervalMs(),
+    extractHour: db.getExtractHour(),
+    lastExtractThrough: db.getLastExtractThrough(),
     checkoutAfter: db.getCheckoutAfter(),
     cardDeviceEnabled: cardDeviceConfigured(),
     cardDeviceIp: process.env.CARD_DEVICE_IP || null,
     cardDeviceUser: process.env.CARD_DEVICE_USER || process.env.DEVICE_USER || null,
   });
+});
+
+// Lets the dashboard pull today's check-ins on demand instead of waiting for
+// the nightly run — e.g. closing out payroll for today without waiting
+// until tomorrow's scheduled extraction. Fires the same runDailyExtraction()
+// the schedule itself calls, just triggered by a click instead of a timer;
+// extractScheduler.runNow() already refuses to overlap a run already in
+// progress.
+app.post('/api/extract/run-now', async (req, res) => {
+  if (!extractScheduler) return res.status(503).json({ error: 'extraction isn\'t set up yet — try again in a moment' });
+  try {
+    await extractScheduler.runNow();
+    res.json({ ok: true, lastExtractThrough: db.getLastExtractThrough() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/settings/device-ip', (req, res) => {
@@ -265,7 +284,7 @@ app.post('/api/settings/card-device-credentials', (req, res) => {
 });
 
 app.post('/api/settings/app', (req, res) => {
-  const { siteName, currency, pollIntervalMs, checkoutAfter } = req.body || {};
+  const { siteName, currency, extractHour, checkoutAfter } = req.body || {};
 
   if (siteName !== undefined) {
     if (typeof siteName !== 'string' || !siteName.trim()) {
@@ -279,13 +298,25 @@ app.post('/api/settings/app', (req, res) => {
     }
     db.setSetting('currency', currency.trim());
   }
-  if (pollIntervalMs !== undefined) {
-    const ms = Number(pollIntervalMs);
-    if (!Number.isFinite(ms) || ms < 250) {
-      return res.status(400).json({ error: 'poll interval must be at least 250ms' });
+  if (extractHour !== undefined) {
+    const hour = Number(extractHour);
+    if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+      return res.status(400).json({ error: 'extraction hour must be a whole number 0-23' });
     }
-    db.setSetting('poll_interval_ms', ms);
-    restartPolling();
+    db.setSetting('extract_hour', hour);
+    // Reschedule rather than letting the already-pending timer fire at the
+    // old hour and only pick up the change on the cycle after that — a
+    // settings change should take effect on the very next run, not the one
+    // after.
+    if (extractScheduler) extractScheduler.stop();
+    extractScheduler = scheduleDailyExtraction({
+      getLastRunAt: () => {
+        const through = db.getLastExtractThrough();
+        return through ? new Date(through).getTime() : null;
+      },
+      getHour: () => db.getExtractHour(),
+      runFn: runDailyExtraction,
+    });
   }
   if (checkoutAfter !== undefined) {
     if (typeof checkoutAfter !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(checkoutAfter)) {
@@ -298,7 +329,8 @@ app.post('/api/settings/app', (req, res) => {
     ok: true,
     siteName: db.getSetting('site_name', 'დასწრების ჟურნალი'),
     currency: db.getSetting('currency', '₾'),
-    pollIntervalMs: db.getPollIntervalMs(),
+    extractHour: db.getExtractHour(),
+    lastExtractThrough: db.getLastExtractThrough(),
     checkoutAfter: db.getCheckoutAfter(),
   });
 });
@@ -792,14 +824,9 @@ async function resolveDeviceWithRetry() {
   }
 }
 
-// Mutable so a poll-interval change from Settings (POST /api/settings/app)
-// can tear down the running interval and start a fresh one at the new
-// speed — no service restart needed for this to take effect.
-let pollTimer = null;
-let consecutiveFailures = 0;
-let rediscoveryInFlight = false;
+let extractScheduler = null;
 
-function onNewCheckin(insertedId) {
+function onNewCheckin(insertedId, { skipPhoto = false } = {}) {
   const inserted = db.getCheckinById(insertedId);
   if (!inserted) return; // shouldn't happen, but don't crash on a stale/bad id
 
@@ -835,32 +862,55 @@ function onNewCheckin(insertedId) {
   logger.log(`[checkin] ${row.name || row.employee_no} (${row.direction}) @ ${row.event_time}`);
   // The card-reader controller has no camera of its own (it's a bare PCB
   // wired to external Wiegand readers) — only ever try to grab a snapshot
-  // for a row that actually came from the face terminal.
-  if (row.device_id === 'face') capturePhoto(row);
+  // for a row that actually came from the face terminal. Also skipped for
+  // every row inserted by the nightly batch extraction: a live snapshot
+  // taken hours after the actual scan would just be a photo of whoever (or
+  // nothing) happens to be in frame at extraction time, not the person who
+  // scanned — worse than no photo at all.
+  if (row.device_id === 'face' && !skipPhoto) capturePhoto(row);
 }
 
-async function onPollError(err) {
-  if (!err) { consecutiveFailures = 0; return; }
-  consecutiveFailures += 1;
-  // If polling keeps failing for a sustained stretch (not just one blip —
-  // ~30s worth of consecutive failures at the current poll interval), the
-  // device may have moved to a new IP (DHCP lease change at a new site).
-  // Re-scan for it rather than staying stuck forever on a stale address.
-  const failureThreshold = Math.max(5, Math.round(30_000 / db.getPollIntervalMs()));
-  if (consecutiveFailures < failureThreshold || rediscoveryInFlight) return;
-  consecutiveFailures = 0;
-  rediscoveryInFlight = true;
+// No history on record yet (brand-new install) — look back this far on the
+// very first run so a same-day enrollment/tap right before the first
+// scheduled run isn't missed.
+const FIRST_RUN_LOOKBACK_MS = 48 * 3600_000;
+
+/** The actual "what to do" for a daily extraction run — sync the roster, then pull and insert any new check-ins since the last run. */
+async function runDailyExtraction() {
+  await syncEmployees();
+
+  const lastThrough = db.getLastExtractThrough();
+  const from = lastThrough ? new Date(lastThrough) : new Date(Date.now() - FIRST_RUN_LOOKBACK_MS);
+  const to = new Date();
+
+  let infoList;
   try {
-    await forceRediscover();
-  } finally {
-    rediscoveryInFlight = false;
+    infoList = await deviceClient.fetchEvents({ startTime: isoWithOffset(from), endTime: isoWithOffset(to) });
+  } catch (err) {
+    // A 401 is a credentials problem — forceRediscover() can't fix that, so
+    // let it propagate as-is (dailyExtract.js logs it; Settings is where a
+    // human fixes it). Anything else (connection refused/timed out) more
+    // likely means the device moved to a new DHCP IP — try to re-find it
+    // once and retry this same run before giving up.
+    if (err instanceof deviceClient.DeviceAuthError) throw err;
+    logger.error('[extract] device unreachable at its last known IP, attempting rediscovery:', err.message);
+    const moved = await forceRediscover();
+    if (!moved) throw err;
+    infoList = await deviceClient.fetchEvents({ startTime: isoWithOffset(from), endTime: isoWithOffset(to) });
   }
-}
 
-function restartPolling() {
-  if (pollTimer) clearInterval(pollTimer);
-  consecutiveFailures = 0;
-  pollTimer = startPolling(db.getPollIntervalMs(), onNewCheckin, onPollError);
+  let inserted = 0;
+  for (const info of infoList) {
+    const parsed = parseJsonEvent(info);
+    if (!isCheckin(parsed)) continue;
+    const insertedId = db.insertCheckin(parsed, 'extract', 'face');
+    if (insertedId) {
+      inserted += 1;
+      onNewCheckin(insertedId, { skipPhoto: true });
+    }
+  }
+  db.setLastExtractThrough(to.toISOString());
+  logger.log(`[extract] fetched ${infoList.length} event(s), inserted ${inserted} new check-in(s) (window ${isoWithOffset(from)} .. ${isoWithOffset(to)})`);
 }
 
 // --- card device lifecycle (only runs at all if cardDeviceConfigured()) ----
@@ -1008,7 +1058,17 @@ server.listen(PORT, async () => {
   setInterval(reconnectCardDevice, 6 * 60 * 60 * 1000); // every 6h
 
   await resolveDeviceWithRetry();
-  syncEmployees();
-  setInterval(syncEmployees, 30 * 60 * 1000); // every 30 min — catches renames/new hires
-  restartPolling();
+  // No separate periodic syncEmployees() call here anymore — runDailyExtraction()
+  // already syncs the roster immediately before every extraction run, and a
+  // standalone 30-min interval on top of that would just reintroduce the
+  // kind of recurring background device traffic this whole batch-extraction
+  // design exists to get rid of.
+  extractScheduler = scheduleDailyExtraction({
+    getLastRunAt: () => {
+      const through = db.getLastExtractThrough();
+      return through ? new Date(through).getTime() : null;
+    },
+    getHour: () => db.getExtractHour(),
+    runFn: runDailyExtraction,
+  });
 });

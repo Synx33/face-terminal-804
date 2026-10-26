@@ -27,7 +27,7 @@
 //     deleteDeviceUser/fetchEnrolledFacePhoto below are UNTESTED against
 //     this device -- only fetchEvents has real evidence behind it so far.
 
-const { digestRequest } = require('./digest');
+const { digestRequest: rawDigestRequest } = require('./digest');
 const { getDeviceIp } = require('./deviceState');
 const { georgiaNaive } = require('./time');
 const authState = require('./deviceAuthState');
@@ -35,6 +35,26 @@ const authState = require('./deviceAuthState');
 function baseUrl() {
   const protocol = process.env.DEVICE_PROTOCOL || 'http';
   return `${protocol}://${getDeviceIp()}`;
+}
+
+// This device's embedded web server ("Server: webs") can't reliably track
+// digest-auth state (nonce/challenge) across two overlapping requests — two
+// genuinely concurrent callers hitting it at once (confirmed live: the
+// poller's first tick and the startup employee sync firing within the same
+// event-loop turn) can both come back 401 even with a correct password,
+// indistinguishable to the device (and to deviceAuthState's failure
+// counter) from an actually-wrong password. The poller's own `inFlight`
+// guard only serializes the poller against itself — it does nothing for a
+// second subsystem calling this same module at the same time. Queuing every
+// call through here, regardless of which function or caller it came from,
+// guarantees at most one HTTP exchange with this device is ever in flight,
+// closing that gap for good instead of relying on every future caller to
+// remember not to overlap.
+let requestQueue = Promise.resolve();
+function digestRequest(opts) {
+  const run = requestQueue.then(() => rawDigestRequest(opts));
+  requestQueue = run.catch(() => {}); // keep the chain alive even if this call fails
+  return run;
 }
 
 // Thrown specifically for a 401 so callers (the poller, in particular) can

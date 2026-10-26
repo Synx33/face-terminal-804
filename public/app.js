@@ -842,9 +842,37 @@ const cardTestMsg = document.getElementById('cardTestMsg');
 
 const siteNameInput = document.getElementById('siteNameInput');
 const currencyInput = document.getElementById('currencyInput');
-const pollIntervalInput = document.getElementById('pollIntervalInput');
+const extractHourInput = document.getElementById('extractHourInput');
+const lastExtractText = document.getElementById('lastExtractText');
+const extractNowBtn = document.getElementById('extractNowBtn');
 const checkoutAfterInput = document.getElementById('checkoutAfterInput');
 const appSettingsMsg = document.getElementById('appSettingsMsg');
+
+function formatLastExtract(iso) {
+  if (!iso) return 'ჯერ არ შესრულებულა';
+  const d = new Date(iso);
+  return d.toLocaleString('ka-GE', { timeZone: 'Asia/Tbilisi' });
+}
+
+extractNowBtn?.addEventListener('click', async () => {
+  extractNowBtn.disabled = true;
+  appSettingsMsg.className = 'enroll-msg';
+  appSettingsMsg.textContent = 'გადმოწერა მიმდინარეობს…';
+  try {
+    const res = await fetch('/api/extract/run-now', { method: 'POST' });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'ვერ შესრულდა');
+    lastExtractText.textContent = formatLastExtract(result.lastExtractThrough);
+    appSettingsMsg.className = 'enroll-msg ok';
+    appSettingsMsg.textContent = 'გადმოწერა დასრულდა';
+    if (typeof load === 'function') load();
+  } catch (err) {
+    appSettingsMsg.className = 'enroll-msg err';
+    appSettingsMsg.textContent = `შეცდომა: ${err.message}`;
+  } finally {
+    extractNowBtn.disabled = false;
+  }
+});
 
 function applySiteName(name) {
   document.getElementById('siteTitle').textContent = name;
@@ -864,7 +892,8 @@ async function loadSettings() {
   if (s.cardDeviceUser) cardUserInput.value = s.cardDeviceUser;
   siteNameInput.value = s.siteName;
   currencyInput.value = s.currency;
-  pollIntervalInput.value = s.pollIntervalMs;
+  extractHourInput.value = s.extractHour;
+  lastExtractText.textContent = formatLastExtract(s.lastExtractThrough);
   checkoutAfterInput.value = s.checkoutAfter;
   currencySymbol = s.currency;
   applySiteName(s.siteName);
@@ -873,11 +902,11 @@ async function loadSettings() {
 const CHECKOUT_AFTER_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 document.getElementById('saveAppSettingsBtn').addEventListener('click', async () => {
-  const pollIntervalMs = Number(pollIntervalInput.value);
+  const extractHour = Number(extractHourInput.value);
   const checkoutAfter = checkoutAfterInput.value.trim();
-  if (!Number.isFinite(pollIntervalMs) || pollIntervalMs < 250) {
+  if (!Number.isInteger(extractHour) || extractHour < 0 || extractHour > 23) {
     appSettingsMsg.className = 'enroll-msg err';
-    appSettingsMsg.textContent = 'შემოწმების ინტერვალი უნდა იყოს მინიმუმ 250 მწმ';
+    appSettingsMsg.textContent = 'გადმოწერის საათი უნდა იყოს მთელი რიცხვი 0-დან 23-მდე';
     return;
   }
   if (!CHECKOUT_AFTER_RE.test(checkoutAfter)) {
@@ -894,7 +923,7 @@ document.getElementById('saveAppSettingsBtn').addEventListener('click', async ()
       body: JSON.stringify({
         siteName: siteNameInput.value.trim() || 'დასწრების ჟურნალი',
         currency: currencyInput.value.trim() || '₾',
-        pollIntervalMs,
+        extractHour,
         checkoutAfter,
       }),
     });
