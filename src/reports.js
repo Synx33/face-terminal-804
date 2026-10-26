@@ -17,7 +17,12 @@ const ZEBRA_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F6
 const TOTAL_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE4ECE5' } };
 
 const DIRECTION_KA = { in: 'შემოსვლა', out: 'გასვლა' };
-const SOURCE_KA = { face: 'სახე', card: 'ბარათი' };
+// device_id 'face' is a leftover internal name from the original codebase
+// (meaning "the primary biometric terminal", as opposed to 'card' for the
+// separate DS-K2802 reader) -- it does NOT mean this unit does face
+// recognition. This fork is built against the DS-K1T804BEF, a fingerprint
+// terminal, so the user-facing label must say fingerprint, not face.
+const SOURCE_KA = { face: 'თითის ანაბეჭდი', card: 'ბარათი' };
 
 function dateOnly(iso) {
   return (iso || '').slice(0, 10);

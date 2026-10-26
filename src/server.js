@@ -112,7 +112,7 @@ app.get('/api/checkins', (req, res) => {
 });
 
 app.get('/api/device', (req, res) => {
-  res.json({ model: 'DS-K1T343EWX', ip: hasDeviceIp() ? getDeviceIp() : null, auth: authState.status() });
+  res.json({ model: 'DS-K1T804BEF', ip: hasDeviceIp() ? getDeviceIp() : null, auth: authState.status() });
 });
 
 app.get('/api/card-device', (req, res) => {

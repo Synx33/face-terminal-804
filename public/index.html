@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title id="pageTitle">დასწრების ჟურნალი — სახის ტერმინალი</title>
+<title id="pageTitle">დასწრების ჟურნალი — თითის ანაბეჭდის ტერმინალი</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
 <link rel="preload" href="/fonts/noto-sans-georgian-geo.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="preload" href="/fonts/noto-serif-georgian-geo.woff2" as="font" type="font/woff2" crossorigin />
@@ -13,11 +13,10 @@
   <div class="wrap">
     <header class="top">
       <div class="brand">
-        <span class="dot" id="liveDot"></span>
         <h1 id="siteTitle">დასწრების ჟურნალი</h1>
       </div>
       <div class="top-right">
-        <span class="subtitle" id="deviceSubtitle">DS-K1T343EWX</span>
+        <span class="subtitle" id="deviceSubtitle">DS-K1T804BEF</span>
         <span class="subtitle" id="cardDeviceSubtitle" hidden></span>
         <button id="settingsBtn" class="icon-btn" title="პარამეტრები" aria-label="პარამეტრები">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
@@ -29,31 +28,32 @@
     </header>
 
     <nav class="tabs" role="tablist">
-      <button class="tab" data-tab="feed" role="tab" aria-selected="true">ჩანაწერები</button>
+      <button class="tab" data-tab="feed" role="tab" aria-selected="true">რეპორტები</button>
       <button class="tab" data-tab="workers" role="tab" aria-selected="false">თანამშრომლები</button>
       <button class="tab" data-tab="payroll" role="tab" aria-selected="false">ხელფასი</button>
     </nav>
 
     <main>
       <section class="tab-panel" data-panel="feed">
+        <p class="panel-hint">ჩამოტვირთეთ დასწრების ანგარიში Excel ფორმატში — დღის, კვირის, თვის ან ნებისმიერი პერიოდისთვის. სურვილისამებრ, შეზღუდეთ კონკრეტულ თანამშრომელზე.</p>
         <div class="controls">
-          <input type="date" id="dateFilter" />
-          <button id="todayBtn">დღეს</button>
           <select id="employeeFilter">
             <option value="">ყველა თანამშრომელი</option>
           </select>
-          <button id="exportCsvBtn" title="ჩამოტვირთეთ ეს ხედი Excel ანგარიშად">რეპორტის ამოღება</button>
-          <button id="exportLast30Btn" title="ჩამოტვირთეთ ბოლო 30 დღის ჩანაწერები Excel ანგარიშად">ბოლო 30 დღე</button>
+        </div>
+        <div class="controls report-quick-buttons">
+          <button id="exportTodayBtn" class="primary" title="ჩამოტვირთეთ დღევანდელი ჩანაწერები Excel ანგარიშად">დღიური (დღეს)</button>
+          <button id="exportLast7Btn" class="primary" title="ჩამოტვირთეთ ბოლო 7 დღის ჩანაწერები Excel ანგარიშად">კვირეული (ბოლო 7 დღე)</button>
+          <button id="exportLast30Btn" class="primary" title="ჩამოტვირთეთ ბოლო 30 დღის ჩანაწერები Excel ანგარიშად">თვიური (ბოლო 30 დღე)</button>
+        </div>
+        <div class="controls">
           <label for="exportRangeStart">დან</label>
           <input type="date" id="exportRangeStart" />
           <label for="exportRangeEnd">მდე</label>
           <input type="date" id="exportRangeEnd" />
-          <button id="exportRangeBtn" title="ჩამოტვირთეთ მითითებული პერიოდი Excel ანგარიშად">პერიოდის ამოღება</button>
+          <button id="exportRangeBtn" title="ჩამოტვირთეთ მითითებული პერიოდი Excel ანგარიშად">პერიოდის ჩამოტვირთვა</button>
           <span id="status"></span>
         </div>
-
-        <div class="feed" id="rows"></div>
-        <div class="empty" id="emptyMsg" hidden>დღეს ჩანაწერი ჯერ არ არის.</div>
       </section>
 
       <section class="tab-panel" data-panel="workers" hidden>

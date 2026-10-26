@@ -1,8 +1,4 @@
-const dateInput = document.getElementById('dateFilter');
-const rowsEl = document.getElementById('rows');
-const emptyMsg = document.getElementById('emptyMsg');
 const statusEl = document.getElementById('status');
-const liveDot = document.getElementById('liveDot');
 const employeeFilter = document.getElementById('employeeFilter');
 
 // --- tabs ------------------------------------------------------------------
@@ -61,14 +57,6 @@ function todayLocal() {
   return `${p.year}-${p.month}-${p.day}`;
 }
 
-dateInput.value = todayLocal();
-
-function timeOnly(iso) {
-  if (!iso) return '—';
-  const m = /T(\d{2}:\d{2}:\d{2})/.exec(iso);
-  return m ? m[1] : iso;
-}
-
 function initials(name) {
   if (!name) return '?';
   return name.trim().split(/\s+/).slice(0, 2).map((p) => p[0]).join('').toUpperCase();
@@ -84,63 +72,6 @@ function escapeHtml(s) {
   return div.innerHTML;
 }
 
-function avatarHtml(row) {
-  if (row.picture_path) return `<img src="/snapshots/${row.picture_path}" alt="" loading="lazy" />`;
-  return initials(row.name);
-}
-
-function directionBadge(direction) {
-  if (!direction) return '';
-  const label = direction === 'in' ? 'შემოსვლა' : 'გასვლა';
-  return `<span class="badge ${direction}">${label}</span>`;
-}
-
-// Only the exception (a card-reader check-in) gets a marker — the face
-// terminal is the default/majority case for every deployment so far, so
-// badging every single row for it would just be noise. Once device_id
-// stops being 'face' for basically everything, this is easy to flip.
-function deviceBadge(deviceId) {
-  if (deviceId !== 'card') return '';
-  return `<span class="badge device-card" title="ბარათის წამკითხველი">ბარათი</span>`;
-}
-
-function renderRow(row, fresh) {
-  const el = document.createElement('div');
-  el.className = 'row' + (fresh ? ' fresh' : '');
-  el.dataset.id = row.id;
-  el.dataset.employee = row.employee_no ?? '';
-  el.innerHTML = `
-    <div class="avatar">${avatarHtml(row)}</div>
-    <div class="who">
-      <div class="name">${row.name ? escapeHtml(row.name) : '(უცნობი)'}</div>
-      <div class="no">#${row.employee_no ?? '—'}</div>
-    </div>
-    <div class="time">${timeOnly(row.event_time)}</div>
-    <div class="badges">${directionBadge(row.direction)}${deviceBadge(row.device_id)}</div>
-  `;
-  return el;
-}
-
-async function load() {
-  const date = dateInput.value;
-  const employeeNo = employeeFilter.value;
-  const params = new URLSearchParams({ date, limit: 500 });
-  if (employeeNo) params.set('employeeNo', employeeNo);
-  const res = await fetch(`/api/checkins?${params}`);
-  const data = await res.json();
-  rowsEl.innerHTML = '';
-  emptyMsg.hidden = data.length > 0;
-  for (const row of data) rowsEl.appendChild(renderRow(row, false));
-  statusEl.textContent = `${data.length} ჩანაწერი`;
-}
-
-dateInput.addEventListener('change', load);
-employeeFilter.addEventListener('change', load);
-document.getElementById('todayBtn').addEventListener('click', () => {
-  dateInput.value = todayLocal();
-  load();
-});
-
 async function loadEmployeeFilterOptions() {
   const res = await fetch('/api/employees');
   const employees = await res.json();
@@ -155,39 +86,10 @@ async function loadEmployeeFilterOptions() {
   employeeFilter.value = current; // survives a reload triggered by worker management changes
 }
 
-function applyPhoto(id, picturePath) {
-  const row = rowsEl.querySelector(`.row[data-id="${id}"]`);
-  if (!row) return;
-  row.querySelector('.avatar').innerHTML = `<img src="/snapshots/${picturePath}" alt="" loading="lazy" />`;
-}
-
-// A live scan should only land in the feed if it matches whatever the
-// dashboard is currently narrowed to — the right day, and (if a worker
-// filter is active) that specific worker. Otherwise a scan from someone
-// NOT selected would pop into a filtered "just this person" view, which
-// would look like the filter silently stopped working.
-function matchesCurrentFilter(row) {
-  if (!row.event_time || !row.event_time.startsWith(dateInput.value)) return false;
-  if (employeeFilter.value && String(row.employee_no) !== employeeFilter.value) return false;
-  return true;
-}
-
-function connectLive() {
-  const ws = new WebSocket(`ws://${location.host}/live`);
-  ws.onopen = () => liveDot.classList.add('live');
-  ws.onclose = () => { liveDot.classList.remove('live'); setTimeout(connectLive, 2000); };
-  ws.onmessage = (msg) => {
-    const data = JSON.parse(msg.data);
-    if (data.type === 'checkin') {
-      const row = data.row;
-      if (!matchesCurrentFilter(row)) return;
-      rowsEl.insertBefore(renderRow(row, true), rowsEl.firstChild);
-      emptyMsg.hidden = true;
-    } else if (data.type === 'photo') {
-      applyPhoto(data.id, data.picture_path);
-    }
-  };
-}
+// No live websocket connection anymore -- this dashboard is report-only now
+// (daily/weekly/monthly export), and the device itself is only ever
+// contacted once a day (or on a manual "run now" from Settings), so there's
+// nothing to push live updates about between those runs.
 
 // --- add worker: capture first, name later -----------------------------------
 
@@ -504,27 +406,34 @@ setInterval(loadCardDeviceInfo, 30_000);
 // re-check it periodically instead of only once at page load.
 setInterval(loadDeviceInfo, 30_000);
 
-document.getElementById('exportCsvBtn').addEventListener('click', () => {
-  const params = new URLSearchParams({ date: dateInput.value });
-  if (employeeFilter.value) params.set('employeeNo', employeeFilter.value);
-  window.location.href = `/api/checkins/export?${params}`;
-});
-
-// -29 days (not -30) so "today" is included and the window is a full 30
+// -(N-1) days (not -N) so "today" is included and the window is a full N
 // calendar days end to end, same off-by-one reasoning as todayLocal() using
 // Georgia-local date parts rather than raw UTC.
-function last30DaysRange() {
+function trailingRange(days) {
   const end = todayLocal();
-  const startParts = georgiaParts(new Date(Date.now() - 29 * 24 * 3600_000));
+  const startParts = georgiaParts(new Date(Date.now() - (days - 1) * 24 * 3600_000));
   const start = `${startParts.year}-${startParts.month}-${startParts.day}`;
   return { start, end };
 }
+function last30DaysRange() { return trailingRange(30); }
 
-document.getElementById('exportLast30Btn').addEventListener('click', () => {
-  const { start, end } = last30DaysRange();
+function downloadRange(start, end) {
   const params = new URLSearchParams({ start, end });
   if (employeeFilter.value) params.set('employeeNo', employeeFilter.value);
   window.location.href = `/api/checkins/export?${params}`;
+}
+
+document.getElementById('exportTodayBtn').addEventListener('click', () => {
+  const today = todayLocal();
+  downloadRange(today, today);
+});
+document.getElementById('exportLast7Btn').addEventListener('click', () => {
+  const { start, end } = trailingRange(7);
+  downloadRange(start, end);
+});
+document.getElementById('exportLast30Btn').addEventListener('click', () => {
+  const { start, end } = trailingRange(30);
+  downloadRange(start, end);
 });
 
 // Free-form alternative to the "last 30 days" shortcut above -- any period,
@@ -549,9 +458,7 @@ document.getElementById('exportRangeBtn').addEventListener('click', () => {
     statusEl.textContent = 'დაწყების თარიღი უნდა იყოს დასრულების თარიღზე ადრე';
     return;
   }
-  const params = new URLSearchParams({ start, end });
-  if (employeeFilter.value) params.set('employeeNo', employeeFilter.value);
-  window.location.href = `/api/checkins/export?${params}`;
+  downloadRange(start, end);
 });
 
 // --- worker management (list / rename / wage / remove) ------------------------
@@ -887,7 +794,7 @@ extractNowBtn?.addEventListener('click', async () => {
 
 function applySiteName(name) {
   document.getElementById('siteTitle').textContent = name;
-  document.getElementById('pageTitle').textContent = `${name} — სახის ტერმინალი`;
+  document.getElementById('pageTitle').textContent = `${name} — თითის ანაბეჭდის ტერმინალი`;
 }
 
 async function loadSettings() {
@@ -1235,7 +1142,7 @@ function closeLightbox() {
 // Explicitly requires an <img> tag (not just ".thumb") so a worker card with
 // no photo yet (rendered as a text-initials placeholder <div>, not an <img>)
 // doesn't open an empty lightbox with a blank src.
-for (const container of [rowsEl, pendingGrid, workerGrid]) {
+for (const container of [pendingGrid, workerGrid]) {
   container.addEventListener('click', (e) => {
     const img = e.target.closest('.avatar img, .pending-card img.thumb');
     if (img) openLightbox(img.src);
@@ -1249,7 +1156,6 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !lightbox.hidden) closeLightbox();
 });
 
-load();
 loadPending();
 loadPendingCards();
 loadDeviceInfo();
@@ -1259,4 +1165,3 @@ loadEmployeeFilterOptions();
 loadWorkers();
 loadBackups();
 calcPayroll();
-connectLive();
