@@ -237,7 +237,7 @@ function Write-EnvFile {
     param([string] $InstallPath, [string] $DataPath)
     $envPath = Join-Path $InstallPath ".env"
     Write-Host "==> writing $envPath"
-    @"
+    $content = @"
 DEVICE_IP=$DeviceIp
 DEVICE_MAC=$DeviceMac
 DEVICE_PROTOCOL=http
@@ -250,7 +250,21 @@ EXTRACT_HOUR=$ExtractHour
 CHECKOUT_AFTER=$CheckoutAfter
 
 RECEIVER_IP=$ListenHost
-"@ | Set-Content -Path $envPath -Encoding UTF8
+"@
+    # Set-Content -Encoding UTF8 writes a byte-order-mark at the start of the
+    # file on Windows PowerShell -- Node's --env-file parser doesn't strip
+    # it, which silently corrupts only the FIRST variable's key (DEVICE_IP
+    # here) while every later line parses fine. Confirmed live: a real
+    # install wrote a byte-for-byte correct DEVICE_IP=... line, yet the
+    # service logged "DEVICE_IP not set" and fell through to MAC-based
+    # discovery anyway -- every other variable in the same file (DEVICE_MAC
+    # included) came through correctly. [System.IO.File]::WriteAllText with
+    # an explicit BOM-less UTF8Encoding sidesteps this regardless of
+    # PowerShell version (5.1's Set-Content has no utf8NoBOM option; this
+    # works identically on 5.1 and 7+ since it's calling .NET directly, not
+    # a cmdlet's version-dependent encoding name).
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($envPath, $content, $utf8NoBom)
 }
 
 function Setup-DataDir {
