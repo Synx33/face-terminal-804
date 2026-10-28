@@ -405,6 +405,18 @@ setInterval(loadCardDeviceInfo, 30_000);
 // expiring, or someone fixing the password from another tab/device) —
 // re-check it periodically instead of only once at page load.
 setInterval(loadDeviceInfo, 30_000);
+// Same reasoning for the extraction error banner -- a dashboard left open
+// overnight should pick up tonight's run result without needing a manual
+// page reload. A bare fetch here, NOT a call to loadSettings() itself --
+// that function also repopulates the Settings dialog's editable input
+// fields (device IP, extract hour, etc.), which would stomp on whatever
+// someone's mid-typing in there if the dialog happens to be open when this
+// interval fires.
+setInterval(async () => {
+  const res = await fetch('/api/settings');
+  const s = await res.json();
+  renderExtractErrorBanner(s.lastExtractError);
+}, 30_000);
 
 // -(N-1) days (not -N) so "today" is included and the window is a full N
 // calendar days end to end, same off-by-one reasoning as todayLocal() using
@@ -797,9 +809,40 @@ function applySiteName(name) {
   document.getElementById('pageTitle').textContent = `${name} — თითის ანაბეჭდის ტერმინალი`;
 }
 
+// Separate from deviceAuthState's own 3-strikes-before-backoff indicator
+// (which drives the header subtitle's "ავტორიზაცია ვერ მოხერხდა" warning) --
+// that counter was tuned for continuous polling, where 3 strikes happen
+// within seconds. At once-a-day extraction a single failed night is only
+// 1-2 strikes, which could take days to trip that indicator. This banner
+// reacts to the very next failed run instead, so a client opening the
+// dashboard after a bad night actually sees something wrong immediately.
+const extractErrorBanner = document.getElementById('extractErrorBanner');
+function renderExtractErrorBanner(lastExtractError) {
+  if (!lastExtractError) {
+    extractErrorBanner.hidden = true;
+    return;
+  }
+  extractErrorBanner.hidden = false;
+  extractErrorBanner.innerHTML = `⚠ ბოლო ავტომატური გადმოწერა ვერ შესრულდა: ${escapeHtml(lastExtractError)} <button id="extractRetryInlineBtn" type="button">ხელახლა ცდა</button>`;
+  document.getElementById('extractRetryInlineBtn').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    e.target.textContent = 'მიმდინარეობს…';
+    try {
+      const res = await fetch('/api/extract/run-now', { method: 'POST' });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || 'ვერ შესრულდა');
+      await loadSettings();
+    } catch (err) {
+      e.target.disabled = false;
+      e.target.textContent = 'ხელახლა ცდა';
+    }
+  });
+}
+
 async function loadSettings() {
   const res = await fetch('/api/settings');
   const s = await res.json();
+  renderExtractErrorBanner(s.lastExtractError);
   if (s.deviceIp) deviceIpInput.value = s.deviceIp;
   ipMode.textContent = s.autoDiscover ? '(ავტომატურად მოძებნილია MAC მისამართით — ჩაწერეთ IP მის მისამაგრებლად)' : '(მითითებულია ხელით)';
   if (s.deviceUser) deviceUserInput.value = s.deviceUser;

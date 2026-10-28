@@ -195,6 +195,7 @@ app.get('/api/settings', (req, res) => {
     currency: db.getSetting('currency', '₾'),
     extractHour: db.getExtractHour(),
     lastExtractThrough: db.getLastExtractThrough(),
+    lastExtractError: db.getLastExtractError(),
     checkoutAfter: db.getCheckoutAfter(),
     cardDeviceEnabled: cardDeviceConfigured(),
     cardDeviceIp: process.env.CARD_DEVICE_IP || null,
@@ -331,6 +332,7 @@ app.post('/api/settings/app', (req, res) => {
     currency: db.getSetting('currency', '₾'),
     extractHour: db.getExtractHour(),
     lastExtractThrough: db.getLastExtractThrough(),
+    lastExtractError: db.getLastExtractError(),
     checkoutAfter: db.getCheckoutAfter(),
   });
 });
@@ -887,41 +889,57 @@ function onNewCheckin(insertedId, { skipPhoto = false } = {}) {
 const FIRST_RUN_LOOKBACK_MS = 48 * 3600_000;
 
 /** The actual "what to do" for a daily extraction run — sync the roster, then pull and insert any new check-ins since the last run. */
+// Tracked separately from deviceAuthState's own 3-strikes-before-backoff
+// counter -- that counter was tuned for continuous polling, where 3 strikes
+// land within ~4.5 seconds, so the dashboard's "auth failing" banner (see
+// loadDeviceInfo() in app.js) shows up almost immediately after a real
+// problem starts. At once-a-day extraction, each run only ever produces 1-2
+// failures total, so the 3-strikes threshold could take SEVERAL DAYS to
+// trip -- meaning a client could go days with extraction silently failing
+// every night and nothing visible in the dashboard to tell them. This gives
+// the very next failed run its own immediate, dedicated signal instead of
+// waiting on a counter that was never meant for this cadence.
 async function runDailyExtraction() {
-  await syncEmployees();
-
-  const lastThrough = db.getLastExtractThrough();
-  const from = lastThrough ? new Date(lastThrough) : new Date(Date.now() - FIRST_RUN_LOOKBACK_MS);
-  const to = new Date();
-
-  let infoList;
   try {
-    infoList = await deviceClient.fetchEvents({ startTime: isoWithOffset(from), endTime: isoWithOffset(to) });
-  } catch (err) {
-    // A 401 is a credentials problem — forceRediscover() can't fix that, so
-    // let it propagate as-is (dailyExtract.js logs it; Settings is where a
-    // human fixes it). Anything else (connection refused/timed out) more
-    // likely means the device moved to a new DHCP IP — try to re-find it
-    // once and retry this same run before giving up.
-    if (err instanceof deviceClient.DeviceAuthError) throw err;
-    logger.error('[extract] device unreachable at its last known IP, attempting rediscovery:', err.message);
-    const moved = await forceRediscover();
-    if (!moved) throw err;
-    infoList = await deviceClient.fetchEvents({ startTime: isoWithOffset(from), endTime: isoWithOffset(to) });
-  }
+    await syncEmployees();
 
-  let inserted = 0;
-  for (const info of infoList) {
-    const parsed = parseJsonEvent(info);
-    if (!isCheckin(parsed)) continue;
-    const insertedId = db.insertCheckin(parsed, 'extract', 'face');
-    if (insertedId) {
-      inserted += 1;
-      onNewCheckin(insertedId, { skipPhoto: true });
+    const lastThrough = db.getLastExtractThrough();
+    const from = lastThrough ? new Date(lastThrough) : new Date(Date.now() - FIRST_RUN_LOOKBACK_MS);
+    const to = new Date();
+
+    let infoList;
+    try {
+      infoList = await deviceClient.fetchEvents({ startTime: isoWithOffset(from), endTime: isoWithOffset(to) });
+    } catch (err) {
+      // A 401 is a credentials problem — forceRediscover() can't fix that, so
+      // let it propagate as-is (dailyExtract.js logs it; Settings is where a
+      // human fixes it). Anything else (connection refused/timed out) more
+      // likely means the device moved to a new DHCP IP — try to re-find it
+      // once and retry this same run before giving up.
+      if (err instanceof deviceClient.DeviceAuthError) throw err;
+      logger.error('[extract] device unreachable at its last known IP, attempting rediscovery:', err.message);
+      const moved = await forceRediscover();
+      if (!moved) throw err;
+      infoList = await deviceClient.fetchEvents({ startTime: isoWithOffset(from), endTime: isoWithOffset(to) });
     }
+
+    let inserted = 0;
+    for (const info of infoList) {
+      const parsed = parseJsonEvent(info);
+      if (!isCheckin(parsed)) continue;
+      const insertedId = db.insertCheckin(parsed, 'extract', 'face');
+      if (insertedId) {
+        inserted += 1;
+        onNewCheckin(insertedId, { skipPhoto: true });
+      }
+    }
+    db.setLastExtractThrough(to.toISOString());
+    db.setLastExtractError('');
+    logger.log(`[extract] fetched ${infoList.length} event(s), inserted ${inserted} new check-in(s) (window ${isoWithOffset(from)} .. ${isoWithOffset(to)})`);
+  } catch (err) {
+    db.setLastExtractError(err.message);
+    throw err; // dailyExtract.js still logs + schedules the next attempt as before
   }
-  db.setLastExtractThrough(to.toISOString());
-  logger.log(`[extract] fetched ${infoList.length} event(s), inserted ${inserted} new check-in(s) (window ${isoWithOffset(from)} .. ${isoWithOffset(to)})`);
 }
 
 // --- card device lifecycle (only runs at all if cardDeviceConfigured()) ----

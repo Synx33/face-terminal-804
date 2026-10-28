@@ -307,6 +307,22 @@ function setLastExtractThrough(isoString) {
   setSetting('last_extract_through', isoString);
 }
 
+// The most recent extraction attempt's error message, or '' if the most
+// recent attempt succeeded. Deliberately a SEPARATE flag from "did it run
+// recently" (getLastExtractThrough) -- a run can fail without updating the
+// high-water mark at all, and this is specifically what lets the dashboard
+// show "last attempt failed" even when the last SUCCESSFUL pull was days
+// ago. See runDailyExtraction()'s comment in server.js for why this exists
+// as its own signal instead of relying on deviceAuthState's 3-strikes
+// counter here.
+function getLastExtractError() {
+  return getSetting('last_extract_error', '');
+}
+
+function setLastExtractError(message) {
+  setSetting('last_extract_error', message || '');
+}
+
 const insertCheckinStmt = db.prepare(`
   INSERT OR IGNORE INTO checkins
     (device_id, serial_no, event_time, received_at, employee_no, name, verify_mode, door_no, major_event, minor_event, source, raw)
@@ -570,7 +586,7 @@ function payroll({ start, end }) {
 
 module.exports = {
   db, upsertEmployee, employeeName, insertCheckin, listCheckins, stats, clearCheckins, DB_PATH,
-  setCheckinPicture, getCheckinById, isSameSession, periodOf, getCheckoutAfter, getExtractHour, getLastExtractThrough, setLastExtractThrough,
+  setCheckinPicture, getCheckinById, isSameSession, periodOf, getCheckoutAfter, getExtractHour, getLastExtractThrough, setLastExtractThrough, getLastExtractError, setLastExtractError,
   insertPendingWorker, listPendingWorkers, getPendingWorker, deletePendingWorker,
   listEmployees, setEmployeeWage, setEmployeePicture, listEmployeesMissingPicture, deleteEmployeeLocal, getSetting, setSetting, payroll,
   setEmployeeCard, employeeByCard, isCardOnlyEmployeeNo, nextLocalEmployeeNo,
