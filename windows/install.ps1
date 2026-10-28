@@ -44,7 +44,11 @@ param(
     # git history. Pass it explicitly: .\install.ps1 -DevicePass "..."
     [Parameter(Mandatory = $true)]
     [string] $DevicePass,
-    [int]    $PollIntervalMs = 1500,
+    # 0-23, Georgia local time -- when the once-daily batch pull runs. This
+    # app does NOT continuously poll the terminal (see README's "Why a
+    # once-daily batch pull" section) -- this device's own web server
+    # can't reliably handle frequent requests, confirmed live, repeatedly.
+    [int]    $ExtractHour = 3,
     [string] $CheckoutAfter = "19:00"
 )
 
@@ -242,7 +246,7 @@ DEVICE_PASS=$DevicePass
 
 PORT=$Port
 FACE_TERMINAL_DATA=$DataPath\data
-POLL_INTERVAL_MS=$PollIntervalMs
+EXTRACT_HOUR=$ExtractHour
 CHECKOUT_AFTER=$CheckoutAfter
 
 RECEIVER_IP=$ListenHost

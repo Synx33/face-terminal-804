@@ -2,10 +2,10 @@
 
 Attendance and payroll dashboard for a Hikvision DS-K1T804 series
 fingerprint/card access terminal — who came in and when, check-in/check-out,
-live updates, photo capture, worker enrollment/management, and daily-wage
-payroll. UI is in Georgian; almost everything (site name, currency, poll
-timing, terminal IP) is customizable from the dashboard itself, no config
-file editing.
+daily/weekly/monthly Excel reports, worker enrollment/management, and
+daily-wage payroll. UI is in Georgian; almost everything (site name,
+currency, the once-daily extraction time, terminal IP) is customizable from
+the dashboard itself, no config file editing.
 
 **This is a separate codebase for a different device model.** Forked from
 [face-terminal-solo](https://github.com/Synx33/face-terminal-solo), which
@@ -16,12 +16,13 @@ already split off from [face-terminal-app](https://github.com/Synx33/face-termin
 for a different reason (no login). Run `windows\update.ps1` to pull the
 latest version of this build specifically.
 
-**Compatibility status: not yet verified against a real DS-K1T804 unit.**
-The ISAPI calls in `src/deviceClient.js` are based on real-world reports
-from other users of this device family (cited in that file's comments),
-not a confirmed working integration. Before relying on this at a real site,
-run `node scripts/probe-device.js <ip> <user> <pass>` against the actual
-terminal — see that script's header comment for what it checks and why.
+**Compatibility status: verified live against a real DS-K1T804BEF unit.**
+Confirmed working end-to-end: device activation, fingerprint identification
+events (`AcsEvent` major=5/minor=38), employee sync, and the full
+daily/weekly/monthly report pipeline, all tested against real hardware and
+real check-ins. `node scripts/probe-device.js <ip> <user> <pass>` is still
+there as a standalone diagnostic if a *different* unit in this family needs
+checking before relying on it at a new site.
 
 The terminal moves between networks (the office LAN during development, an
 install site afterward), so it doesn't need a hardcoded IP: leave `DEVICE_IP`
@@ -113,7 +114,7 @@ Or as a systemd service — see `face-terminal.service` for the unit file
 | `DEVICE_MAC` | Terminal's MAC address, used for discovery. |
 | `DEVICE_USER` / `DEVICE_PASS` | Terminal's admin login (ISAPI digest auth). |
 | `PORT` | Dashboard port (default 3070). |
-| `POLL_INTERVAL_MS` | Initial poll interval (default 1500ms) — overridable live from Settings afterward, which takes precedence once set. |
+| `EXTRACT_HOUR` | Initial hour (0-23, Georgia local time, default 3) the once-daily batch pull runs at — overridable live from Settings afterward, which takes precedence once set. |
 | `CHECKOUT_AFTER` | Initial checkout-time boundary, "HH:MM" 24h (default 19:00) — same as above, overridable live from Settings. |
 | `RECEIVER_IP` | Hostname/IP shown in the startup log line for the dashboard URL (cosmetic only). |
 | `FACE_TERMINAL_DATA` | Where the SQLite DB, snapshots, backups, and log file live. |
@@ -123,15 +124,16 @@ Or as a systemd service — see `face-terminal.service` for the unit file
 
 ## What it does
 
-The dashboard is organized into three tabs — **ჩანაწერები** (Feed),
+The dashboard is organized into three tabs — **რეპორტები** (Reports),
 **თანამშრომლები** (Workers), **ხელფასი** (Payroll) — plus a Settings dialog
 (gear icon in the header) for terminal/device config and maintenance.
 
-- **Live check-in feed** — polls the terminal's own event log (not push
-  notifications — see below) every 1.5s (customizable), shows who badged
-  in/out with a photo, in real time. Filterable by date and by worker;
-  exports to a formatted Excel report (title block, colored header, zebra
-  striping — not a raw CSV).
+- **Reports** — daily, weekly (last 7 days), monthly (last 30 days), or any
+  custom date range, optionally scoped to one worker. Exports to a
+  formatted Excel report (title block, colored header, zebra striping — not
+  a raw CSV). Deliberately **not** a live view — see "Why a once-daily batch
+  pull, not continuous polling" below for why this app doesn't try to show
+  check-ins as they happen.
 - **Optional card-reader controller (DS-K2802)** — a second, independent
   device this dashboard can listen to alongside the face terminal for
   card-swipe check-ins, useful anywhere face recognition is too
@@ -218,11 +220,15 @@ The dashboard is organized into three tabs — **ჩანაწერები*
   too, not only from the Workers tab. Exports to a formatted Excel report,
   including each employee's actual attended dates (not just a count) and a
   grand-total row.
-- **Settings** — site name, currency symbol, poll interval, and the
-  checkout-time boundary are all live-editable, no restart needed. Also:
-  pin/change the device IP and credentials, clear check-in history,
-  view/clear the log, and trigger or review database backups — all without
-  touching a config file or SSH/RDP.
+- **Settings** — site name, currency symbol, the once-daily extraction hour,
+  and the checkout-time boundary are all live-editable, no restart needed.
+  Also: pin/change the device IP and credentials, trigger an immediate
+  "Download now" pull instead of waiting for the scheduled hour, clear
+  check-in history, view/clear the log, and trigger or review database
+  backups — all without touching a config file or SSH/RDP. A banner at the
+  top of the Reports tab surfaces a failed extraction immediately, with a
+  one-click retry, rather than it going unnoticed until someone wonders why
+  recent check-ins are missing.
 - **Automatic backups** — runs at startup and every 10 minutes after,
   covering both the database (via `node:sqlite`'s own online-backup API,
   safe even while the live DB is being written to) and every worker photo
@@ -230,12 +236,25 @@ The dashboard is organized into three tabs — **ჩანაწერები*
   backed-up photo even if the original is removed). Every backup from the
   last 24h is kept as-is; beyond that, one per day survives for 30 days.
 
-### Why polling, not the terminal's push notifications
+### Why a once-daily batch pull, not continuous polling or push
 
 Arming the terminal's `httpHosts` push config flooded the receiver with an
 unrelated historical backlog of operation-log noise instead of real-time
-events. Polling its `AcsEvent` search API directly is slower in theory
-(bounded by the poll interval) but proved far more reliable in practice.
+events — so this app pulls from its `AcsEvent` search API directly instead.
+
+It does that pull **once a day** (default 3am, configurable), not on a
+short interval. Confirmed live, repeatedly: this device's embedded web
+server can't reliably handle frequent digest-auth traffic — both a
+too-fast poll loop and even two separate processes politely taking turns
+tripped its account lockout (Illegal Login Lock), sometimes requiring a
+reboot to clear. One request window a day instead of one every couple of
+seconds removes that whole failure class rather than fighting it with
+retry/backoff tuning. The trade-off is deliberate: check-ins show up after
+the nightly run (or an on-demand "Download now" from Settings), not live —
+fine for attendance/payroll, not built for live monitoring. Nothing is
+ever lost in the meantime: every pull fetches everything since the last
+successful one, so a device that was briefly unreachable just gets caught
+up on the next successful run.
 
 ## Security notes
 
